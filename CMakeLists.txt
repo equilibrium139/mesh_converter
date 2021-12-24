@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.17)
 
 project(mesh_converter LANGUAGES CXX)
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 include(FetchContent)
 
 
@@ -21,6 +25,13 @@ add_executable(mesh_converter src/Main.cpp
 )
 
 target_link_libraries(mesh_converter assimp)
+target_include_directories(mesh_converter PUBLIC ${assimp_SOURCE_DIR}/include)
+
+if(MSVC)
+  target_compile_options(mesh_converter PRIVATE /W4)
+else()
+  target_compile_options(mesh_converter PRIVATE -Wall -Wextra -pedantic)
+endif()
 
 if (WIN32)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
