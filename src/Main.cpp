@@ -99,7 +99,7 @@ struct Mesh
     unsigned int material_index;
 };
 
-struct ModelFileContent
+struct ModelFile
 {
     struct Header 
     {
@@ -117,7 +117,7 @@ struct ModelFileContent
     std::string name;
 };
 
-struct MaterialFileContent
+struct MaterialFile
 {
     struct Header
     {
@@ -135,7 +135,7 @@ struct Joint
     int parent;
 };
 
-struct SkeletonFileContent
+struct SkeletonFile
 {
     struct Header
     {
@@ -159,7 +159,7 @@ struct SkeletonPose
     std::vector<JointPose> joint_poses;
 };
 
-struct AnimationClipFileContent
+struct AnimationClipFile
 {
     struct Header
     {
@@ -175,14 +175,14 @@ struct AnimationClipFileContent
     std::string name;
 };
 
-SkeletonFileContent ExtractSkeletonFileContent(const aiScene* scene);
-std::vector<AnimationClipFileContent> ExtractAnimationFilesContent(const std::vector<aiAnimation*>& assimp_animations, const SkeletonFileContent& skeleton);
-ModelFileContent ExtractModelFileContent(const std::vector<aiMesh*>& assimp_meshes, const std::string& file_path, const SkeletonFileContent& skeleton);
-std::vector<MaterialFileContent> ExtractMaterialFilesContent(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene);
-void WriteSkeletonFileContent(const SkeletonFileContent& contents, const std::string& file_path);
-void WriteAnimationFilesContent(const AnimationClipFileContent& contents);
-void WriteModelFileContent(const ModelFileContent& contents);
-void WriteMaterialFileContent(const MaterialFileContent& contents);
+SkeletonFile ExtractSkeleton(const aiScene* scene);
+std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimation*>& assimp_animations, const SkeletonFile& skeleton);
+ModelFile ExtractModels(const std::vector<aiMesh*>& assimp_meshes, const std::string& file_path, const SkeletonFile& skeleton);
+std::vector<MaterialFile> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene);
+void WriteSkeletonFile(const SkeletonFile& skeleton, const std::string& file_path);
+void WriteAnimationFiles(const AnimationClipFile& animation);
+void WriteModelFile(const ModelFile& model);
+void WriteMaterialFiles(const MaterialFile& material);
 void ConvertMesh(const char* path);
 void PushChildrenOf(std::vector<aiNode*>& nodes, std::vector<int>& parent, unsigned int begin);
 std::pair<std::vector<aiNode*>, std::vector<int>> FlattenNodeHierarchy(aiNode* root);
@@ -226,35 +226,35 @@ void ConvertMesh(const char* path)
     std::cout << "Enter model name: ";
     std::cin >> model_name;
 
-    auto skeleton_file_content = ExtractSkeletonFileContent(scene);
-    auto animation_clip_files_content = ExtractAnimationFilesContent(skeleton_animations, skeleton_file_content);
-    auto model_file_content = ExtractModelFileContent(model_meshes, model_name + ".model", skeleton_file_content);
-    auto material_files_content = ExtractMaterialFilesContent(model_materials, scene);
+    auto skeleton_file = ExtractSkeleton(scene);
+    auto animation_clip_files = ExtractAnimationClips(skeleton_animations, skeleton_file);
+    auto model_file = ExtractModels(model_meshes, model_name + ".model", skeleton_file);
+    auto material_files = ExtractMaterials(model_materials, scene);
 
-    if (skeleton_file_content.header.num_joints > 0)
+    if (skeleton_file.header.num_joints > 0)
     {
-        WriteSkeletonFileContent(skeleton_file_content, model_name + ".skeleton");
+        WriteSkeletonFile(skeleton_file, model_name + ".skeleton");
 
-        model_file_content.header.vertex_flags |= VertexFlags::HAS_JOINT_DATA;
+        model_file.header.vertex_flags |= VertexFlags::HAS_JOINT_DATA;
 
-        for (auto& animation_clip : animation_clip_files_content)
+        for (auto& animation_clip : animation_clip_files)
         {
-            WriteAnimationFilesContent(animation_clip);
+            WriteAnimationFiles(animation_clip);
         }
     }
 
-    const bool model_has_normal_map = material_files_content[0].material.normal_map_filename.size() > 0;
-    if (model_has_normal_map) model_file_content.header.vertex_flags |= VertexFlags::HAS_TANGENT;
+    const bool model_has_normal_map = material_files[0].material.normal_map_filename.size() > 0;
+    if (model_has_normal_map) model_file.header.vertex_flags |= VertexFlags::HAS_TANGENT;
 
-    WriteModelFileContent(model_file_content);
+    WriteModelFile(model_file);
 
-    for (auto& material : material_files_content)
+    for (auto& material : material_files)
     {
-        WriteMaterialFileContent(material);
+        WriteMaterialFiles(material);
     }
 }
 
-SkeletonFileContent ExtractSkeletonFileContent(const aiScene* scene)
+SkeletonFile ExtractSkeleton(const aiScene* scene)
 {
     auto flattened_nodes = FlattenNodeHierarchy(scene->mRootNode);
     auto& nodes = flattened_nodes.first;
@@ -285,9 +285,9 @@ SkeletonFileContent ExtractSkeletonFileContent(const aiScene* scene)
         }
     }
 
-    SkeletonFileContent skeleton_file_content;
-    auto& joints = skeleton_file_content.joints;
-    auto& joint_names = skeleton_file_content.joint_names;
+    SkeletonFile skeleton_file;
+    auto& joints = skeleton_file.joints;
+    auto& joint_names = skeleton_file.joint_names;
 
     // Add only nodes which correspond to a bone to the skeleton
     for (auto i = 0u; i < num_nodes; i++)
@@ -312,18 +312,18 @@ SkeletonFileContent ExtractSkeletonFileContent(const aiScene* scene)
         }
     }
     
-    skeleton_file_content.header.num_joints = (std::uint32_t)joints.size();
-    return skeleton_file_content;
+    skeleton_file.header.num_joints = (std::uint32_t)joints.size();
+    return skeleton_file;
 }
 
-ModelFileContent ExtractModelFileContent(const std::vector<aiMesh*>& assimp_meshes, const std::string& file_path, const SkeletonFileContent& skeleton)
+ModelFile ExtractModels(const std::vector<aiMesh*>& assimp_meshes, const std::string& file_path, const SkeletonFile& skeleton)
 {
-    ModelFileContent model_file_content;
-    model_file_content.header.num_meshes = (unsigned int)assimp_meshes.size();
-    model_file_content.name = file_path;
-    auto& meshes = model_file_content.meshes;
-    auto& indices = model_file_content.indices;
-    auto& vertices = model_file_content.vertices;
+    ModelFile model_file;
+    model_file.header.num_meshes = (unsigned int)assimp_meshes.size();
+    model_file.name = file_path;
+    auto& meshes = model_file.meshes;
+    auto& indices = model_file.indices;
+    auto& vertices = model_file.vertices;
 
     // Process meshes
     for (auto i = 0u; i < assimp_meshes.size(); i++)
@@ -394,26 +394,26 @@ ModelFileContent ExtractModelFileContent(const std::vector<aiMesh*>& assimp_mesh
         }
     }
 
-    model_file_content.header.num_vertices = (unsigned int)vertices.size();
-    model_file_content.header.num_indices = (unsigned int)indices.size();
+    model_file.header.num_vertices = (unsigned int)vertices.size();
+    model_file.header.num_indices = (unsigned int)indices.size();
 
-    return model_file_content;
+    return model_file;
 }
 
-std::vector<MaterialFileContent> ExtractMaterialFilesContent(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene)
+std::vector<MaterialFile> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene)
 {
-    std::vector<MaterialFileContent> material_files_content;
+    std::vector<MaterialFile> material_files;
 
     for (auto i = 0u; i < assimp_materials.size(); i++)
     {
         auto material = assimp_materials[i];
 
-        material_files_content.emplace_back();
-        auto& material_file_content = material_files_content.back();
+        material_files.emplace_back();
+        auto& material_file = material_files.back();
         if (material->GetName().C_Str() == nullptr) std::cout << "Warning: unnamed material\n";
-        material_file_content.name = material->GetName().C_Str();
+        material_file.name = material->GetName().C_Str();
 
-        auto& new_material = material_file_content.material;
+        auto& new_material = material_file.material;
 
         aiColor3D diffuse_color;
         material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
@@ -542,7 +542,7 @@ std::vector<MaterialFileContent> ExtractMaterialFilesContent(const std::vector<a
         }
     }
 
-    return material_files_content;
+    return material_files;
 }
 
 static JointPose ToJointPose(const aiMatrix4x4 matrix)
@@ -558,9 +558,9 @@ static JointPose ToJointPose(const aiMatrix4x4 matrix)
     return joint_pose;
 }
 
-std::vector<AnimationClipFileContent> ExtractAnimationFilesContent(const std::vector<aiAnimation*>& assimp_animations, const SkeletonFileContent& skeleton)
+std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimation*>& assimp_animations, const SkeletonFile& skeleton)
 {
-    std::vector<AnimationClipFileContent> animation_clip_files_content;
+    std::vector<AnimationClipFile> animation_clip_files;
 
     const aiMatrix4x4 identity_matrix;
     const JointPose identity_joint_pose = ToJointPose(identity_matrix);
@@ -571,19 +571,19 @@ std::vector<AnimationClipFileContent> ExtractAnimationFilesContent(const std::ve
     for (auto& assimp_animation : assimp_animations)
     {
         // assert(assimp_animation->mNumChannels == skeleton.header.num_joints);
-        animation_clip_files_content.emplace_back();
-        auto& animation_clip_content = animation_clip_files_content.back();
-        animation_clip_content.header.frame_count = (std::uint32_t)assimp_animation->mDuration;
-        animation_clip_content.header.frames_per_second = (float)assimp_animation->mTicksPerSecond;
-        animation_clip_content.name = assimp_animation->mName.C_Str();
-        auto& skeleton_poses = animation_clip_content.skeleton_poses;
-        skeleton_poses.resize(animation_clip_content.header.frame_count);
+        animation_clip_files.emplace_back();
+        auto& animation_clip = animation_clip_files.back();
+        animation_clip.header.frame_count = (std::uint32_t)assimp_animation->mDuration;
+        animation_clip.header.frames_per_second = (float)assimp_animation->mTicksPerSecond;
+        animation_clip.name = assimp_animation->mName.C_Str();
+        auto& skeleton_poses = animation_clip.skeleton_poses;
+        skeleton_poses.resize(animation_clip.header.frame_count);
         for (auto& pose : skeleton_poses) pose = identity_skeleton_pose;
         for (auto i = 0u; i < assimp_animation->mNumChannels; i++)
         {
             auto node_anim = assimp_animation->mChannels[i];
             assert(node_anim->mNumPositionKeys == node_anim->mNumRotationKeys && node_anim->mNumPositionKeys == node_anim->mNumScalingKeys);
-            const int pose_count = animation_clip_content.header.frame_count + (animation_clip_content.header.loops ? 0 : 1);
+            const auto pose_count = animation_clip.header.frame_count + (animation_clip.header.loops ? 0 : 1);
             assert(node_anim->mNumPositionKeys == pose_count || node_anim->mNumPositionKeys == 1);
             auto node_joint_index = 0u;
             while (node_joint_index < skeleton.header.num_joints && skeleton.joint_names[node_joint_index] != node_anim->mNodeName.C_Str()) node_joint_index++;
@@ -605,7 +605,7 @@ std::vector<AnimationClipFileContent> ExtractAnimationFilesContent(const std::ve
             }
             else
             {
-                for (auto j = 0u; j < animation_clip_content.header.frame_count; j++)
+                for (auto j = 0u; j < animation_clip.header.frame_count; j++)
                 {
                     auto scaling = node_anim->mScalingKeys[j].mValue;
                     auto rotation = node_anim->mRotationKeys[j].mValue;
@@ -622,16 +622,16 @@ std::vector<AnimationClipFileContent> ExtractAnimationFilesContent(const std::ve
         }
     }
 
-    return animation_clip_files_content;
+    return animation_clip_files;
 }
 
-void WriteSkeletonFileContent(const SkeletonFileContent& contents, const std::string& file_path)
+void WriteSkeletonFile(const SkeletonFile& skeleton, const std::string& file_path)
 {
     std::ofstream file(file_path, std::ios::binary);
     
-    file.write((const char*)&contents.header, sizeof(SkeletonFileContent::Header));
-    file.write((const char*)contents.joints.data(), contents.joints.size() * sizeof(Joint));
-    for (auto& name : contents.joint_names)
+    file.write((const char*)&skeleton.header, sizeof(SkeletonFile::Header));
+    file.write((const char*)skeleton.joints.data(), skeleton.joints.size() * sizeof(Joint));
+    for (auto& name : skeleton.joint_names)
     {
         std::uint32_t num_chars = (std::uint32_t)name.size();
         file.write((const char*)&num_chars, sizeof(num_chars));
@@ -639,36 +639,36 @@ void WriteSkeletonFileContent(const SkeletonFileContent& contents, const std::st
     }
 }
 
-void WriteAnimationFilesContent(const AnimationClipFileContent& contents)
+void WriteAnimationFiles(const AnimationClipFile& animation_clip)
 {
-    assert(contents.header.frame_count == contents.skeleton_poses.size());
+    assert(animation_clip.header.frame_count == animation_clip.skeleton_poses.size());
 
-    std::ofstream file(contents.name + ".animation", std::ios::binary);
+    std::ofstream file(animation_clip.name + ".animation", std::ios::binary);
 
-    file.write((const char*)&contents.header, sizeof(AnimationClipFileContent::Header));
+    file.write((const char*)&animation_clip.header, sizeof(AnimationClipFile::Header));
     
-    for (auto& pose : contents.skeleton_poses)
+    for (auto& pose : animation_clip.skeleton_poses)
     {
         file.write((const char*)pose.joint_poses.data(), pose.joint_poses.size() * sizeof(pose.joint_poses.front()));
     }
 }
 
-void WriteModelFileContent(const ModelFileContent& content)
+void WriteModelFile(const ModelFile& model)
 {
-    assert(content.header.num_meshes == content.meshes.size() && 
-           content.header.num_vertices == content.vertices.size() &&
-           content.header.num_indices == content.indices.size());
+    assert(model.header.num_meshes == model.meshes.size() && 
+           model.header.num_vertices == model.vertices.size() &&
+           model.header.num_indices == model.indices.size());
 
-    std::ofstream file(content.name, std::ios::binary);
+    std::ofstream file(model.name, std::ios::binary);
 
-    file.write((const char*)&content.header, sizeof(ModelFileContent::Header));
-    file.write((const char*)content.meshes.data(), sizeof(content.meshes.front()) * content.meshes.size());
+    file.write((const char*)&model.header, sizeof(ModelFile::Header));
+    file.write((const char*)model.meshes.data(), sizeof(model.meshes.front()) * model.meshes.size());
     
-    const bool needs_tangents = HasFlag(content.header.vertex_flags, VertexFlags::HAS_TANGENT);
-    const bool needs_joint_data = HasFlag(content.header.vertex_flags, VertexFlags::HAS_JOINT_DATA);
+    const bool needs_tangents = HasFlag(model.header.vertex_flags, VertexFlags::HAS_TANGENT);
+    const bool needs_joint_data = HasFlag(model.header.vertex_flags, VertexFlags::HAS_JOINT_DATA);
 
     // nothing to do, write full vertex buffer as is
-    if (needs_tangents && needs_joint_data) file.write((const char*)content.vertices.data(), sizeof(content.vertices.front()) * content.vertices.size());
+    if (needs_tangents && needs_joint_data) file.write((const char*)model.vertices.data(), sizeof(model.vertices.front()) * model.vertices.size());
     else
     {
         // Copy only needed vertex data to the file
@@ -678,10 +678,10 @@ void WriteModelFileContent(const ModelFileContent& content)
         constexpr auto tangent_data_size = sizeof(Vec3);
         constexpr auto joint_data_size = sizeof(std::uint32_t) + sizeof(Vec4);
         const auto vertex_size_in_bytes = default_vertex_size + (needs_tangents ? tangent_data_size : 0) + (needs_joint_data ? joint_data_size : 0);
-        const auto vertex_buffer_size_in_bytes = content.vertices.size() * vertex_size_in_bytes;
+        const auto vertex_buffer_size_in_bytes = model.vertices.size() * vertex_size_in_bytes;
         auto vertex_buffer = std::make_unique<std::uint8_t[]>(vertex_buffer_size_in_bytes);
         auto buffer_ptr = vertex_buffer.get();
-        for (const auto& vertex : content.vertices)
+        for (const auto& vertex : model.vertices)
         {
             std::memcpy(buffer_ptr, &vertex, default_vertex_size);
             buffer_ptr += default_vertex_size;
@@ -700,26 +700,26 @@ void WriteModelFileContent(const ModelFileContent& content)
         file.write((const char*)vertex_buffer.get(), vertex_buffer_size_in_bytes);
     }
 
-    file.write((const char*)content.indices.data(), sizeof(content.indices.front()) * content.indices.size());
+    file.write((const char*)model.indices.data(), sizeof(model.indices.front()) * model.indices.size());
 }
 
-void WriteMaterialFileContent(const MaterialFileContent& content)
+void WriteMaterialFiles(const MaterialFile& material)
 {
-    std::ofstream file(content.name + ".material", std::ios::binary);
+    std::ofstream file(material.name + ".material", std::ios::binary);
 
-    file.write((const char*)&content.header, sizeof(MaterialFileContent::Header));
-    file.write((const char*)&content.material.diffuse_coefficient, sizeof(content.material.diffuse_coefficient));
-    file.write((const char*)&content.material.specular_coefficient, sizeof(content.material.specular_coefficient));
-    file.write((const char*)&content.material.shininess, sizeof(content.material.shininess));
-    std::uint32_t num_chars_diffuse = (std::uint32_t)content.material.diffuse_map_filename.size();
+    file.write((const char*)&material.header, sizeof(MaterialFile::Header));
+    file.write((const char*)&material.material.diffuse_coefficient, sizeof(material.material.diffuse_coefficient));
+    file.write((const char*)&material.material.specular_coefficient, sizeof(material.material.specular_coefficient));
+    file.write((const char*)&material.material.shininess, sizeof(material.material.shininess));
+    std::uint32_t num_chars_diffuse = (std::uint32_t)material.material.diffuse_map_filename.size();
     file.write((const char*)&num_chars_diffuse, sizeof(num_chars_diffuse));
-    file.write(content.material.diffuse_map_filename.c_str(), num_chars_diffuse);
-    std::uint32_t num_chars_specular = (std::uint32_t)content.material.specular_map_filename.size();
+    file.write(material.material.diffuse_map_filename.c_str(), num_chars_diffuse);
+    std::uint32_t num_chars_specular = (std::uint32_t)material.material.specular_map_filename.size();
     file.write((const char*)&num_chars_specular, sizeof(num_chars_specular));
-    file.write(content.material.specular_map_filename.c_str(), num_chars_specular);
-    std::uint32_t num_chars_normal = (std::uint32_t)content.material.normal_map_filename.size();
+    file.write(material.material.specular_map_filename.c_str(), num_chars_specular);
+    std::uint32_t num_chars_normal = (std::uint32_t)material.material.normal_map_filename.size();
     file.write((const char*)&num_chars_normal, sizeof(num_chars_normal));
-    file.write(content.material.normal_map_filename.c_str(), num_chars_normal);
+    file.write(material.material.normal_map_filename.c_str(), num_chars_normal);
 }
 
 void PushChildrenOf(std::vector<aiNode*>& nodes, std::vector<int>& parent, unsigned int begin)
