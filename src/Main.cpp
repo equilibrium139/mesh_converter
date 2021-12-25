@@ -107,6 +107,7 @@ struct ModelFile
         std::uint32_t num_meshes;
         std::uint32_t num_vertices;
         std::uint32_t num_indices;
+        std::uint32_t num_materials;
         VertexFlags vertex_flags = VertexFlags::DEFAULT;
         // add padding if needed
     };
@@ -114,18 +115,7 @@ struct ModelFile
     std::vector<Mesh> meshes;
     std::vector<Vertex> vertices;
     std::vector<unsigned int> indices;
-    std::string name;
-};
-
-struct MaterialFile
-{
-    struct Header
-    {
-        std::uint32_t magic_number = 'lrtm';
-        // add padding if needed
-    };
-    Header header;
-    PhongMaterial material;
+    std::vector<PhongMaterial> materials;
     std::string name;
 };
 
@@ -178,11 +168,10 @@ struct AnimationClipFile
 SkeletonFile ExtractSkeleton(const aiScene* scene);
 std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimation*>& assimp_animations, const SkeletonFile& skeleton);
 ModelFile ExtractModels(const std::vector<aiMesh*>& assimp_meshes, const std::string& file_path, const SkeletonFile& skeleton);
-std::vector<MaterialFile> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene);
+std::vector<PhongMaterial> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene);
 void WriteSkeletonFile(const SkeletonFile& skeleton, const std::string& file_path);
 void WriteAnimationFiles(const AnimationClipFile& animation);
 void WriteModelFile(const ModelFile& model);
-void WriteMaterialFiles(const MaterialFile& material);
 void ConvertMesh(const char* path);
 void PushChildrenOf(std::vector<aiNode*>& nodes, std::vector<int>& parent, unsigned int begin);
 std::pair<std::vector<aiNode*>, std::vector<int>> FlattenNodeHierarchy(aiNode* root);
@@ -229,7 +218,7 @@ void ConvertMesh(const char* path)
     auto skeleton_file = ExtractSkeleton(scene);
     auto animation_clip_files = ExtractAnimationClips(skeleton_animations, skeleton_file);
     auto model_file = ExtractModels(model_meshes, model_name + ".model", skeleton_file);
-    auto material_files = ExtractMaterials(model_materials, scene);
+    model_file.materials = ExtractMaterials(model_materials, scene);
 
     if (skeleton_file.header.num_joints > 0)
     {
@@ -243,15 +232,10 @@ void ConvertMesh(const char* path)
         }
     }
 
-    const bool model_has_normal_map = material_files[0].material.normal_map_filename.size() > 0;
+    const bool model_has_normal_map = model_file.materials[0].normal_map_filename.size() > 0;
     if (model_has_normal_map) model_file.header.vertex_flags |= VertexFlags::HAS_TANGENT;
 
     WriteModelFile(model_file);
-
-    for (auto& material : material_files)
-    {
-        WriteMaterialFiles(material);
-    }
 }
 
 SkeletonFile ExtractSkeleton(const aiScene* scene)
@@ -400,20 +384,16 @@ ModelFile ExtractModels(const std::vector<aiMesh*>& assimp_meshes, const std::st
     return model_file;
 }
 
-std::vector<MaterialFile> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene)
+std::vector<PhongMaterial> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene)
 {
-    std::vector<MaterialFile> material_files;
+    std::vector<PhongMaterial> materials;
 
     for (auto i = 0u; i < assimp_materials.size(); i++)
     {
         auto material = assimp_materials[i];
 
-        material_files.emplace_back();
-        auto& material_file = material_files.back();
-        if (material->GetName().C_Str() == nullptr) std::cout << "Warning: unnamed material\n";
-        material_file.name = material->GetName().C_Str();
-
-        auto& new_material = material_file.material;
+        materials.emplace_back();
+        auto& new_material = materials.back();
 
         aiColor3D diffuse_color;
         material->Get(AI_MATKEY_COLOR_DIFFUSE, diffuse_color);
@@ -542,7 +522,7 @@ std::vector<MaterialFile> ExtractMaterials(const std::vector<aiMaterial*>& assim
         }
     }
 
-    return material_files;
+    return materials;
 }
 
 static JointPose ToJointPose(const aiMatrix4x4 matrix)
@@ -701,25 +681,16 @@ void WriteModelFile(const ModelFile& model)
     }
 
     file.write((const char*)model.indices.data(), sizeof(model.indices.front()) * model.indices.size());
-}
 
-void WriteMaterialFiles(const MaterialFile& material)
-{
-    std::ofstream file(material.name + ".material", std::ios::binary);
-
-    file.write((const char*)&material.header, sizeof(MaterialFile::Header));
-    file.write((const char*)&material.material.diffuse_coefficient, sizeof(material.material.diffuse_coefficient));
-    file.write((const char*)&material.material.specular_coefficient, sizeof(material.material.specular_coefficient));
-    file.write((const char*)&material.material.shininess, sizeof(material.material.shininess));
-    std::uint32_t num_chars_diffuse = (std::uint32_t)material.material.diffuse_map_filename.size();
-    file.write((const char*)&num_chars_diffuse, sizeof(num_chars_diffuse));
-    file.write(material.material.diffuse_map_filename.c_str(), num_chars_diffuse);
-    std::uint32_t num_chars_specular = (std::uint32_t)material.material.specular_map_filename.size();
-    file.write((const char*)&num_chars_specular, sizeof(num_chars_specular));
-    file.write(material.material.specular_map_filename.c_str(), num_chars_specular);
-    std::uint32_t num_chars_normal = (std::uint32_t)material.material.normal_map_filename.size();
-    file.write((const char*)&num_chars_normal, sizeof(num_chars_normal));
-    file.write(material.material.normal_map_filename.c_str(), num_chars_normal);
+    for (auto& material : model.materials)
+    {
+        file.write((const char*)&material.diffuse_coefficient, sizeof(material.diffuse_coefficient));
+        file.write((const char*)&material.specular_coefficient, sizeof(material.specular_coefficient));
+        // size + 1 for strings to include null terminator
+        file.write(material.diffuse_map_filename.c_str(), material.diffuse_map_filename.size() + 1); 
+        file.write(material.specular_map_filename.c_str(), material.specular_map_filename.size() + 1); 
+        file.write(material.normal_map_filename.c_str(), material.normal_map_filename.size() + 1); 
+    }
 }
 
 void PushChildrenOf(std::vector<aiNode*>& nodes, std::vector<int>& parent, unsigned int begin)
