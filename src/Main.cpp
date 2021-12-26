@@ -219,6 +219,7 @@ void ConvertMesh(const char* path)
     auto animation_clip_files = ExtractAnimationClips(skeleton_animations, skeleton_file);
     auto model_file = ExtractModels(model_meshes, model_name + ".model", skeleton_file);
     model_file.materials = ExtractMaterials(model_materials, scene);
+    model_file.header.num_materials = model_file.materials.size();
 
     if (skeleton_file.header.num_joints > 0)
     {
@@ -686,6 +687,7 @@ void WriteModelFile(const ModelFile& model)
     {
         file.write((const char*)&material.diffuse_coefficient, sizeof(material.diffuse_coefficient));
         file.write((const char*)&material.specular_coefficient, sizeof(material.specular_coefficient));
+        file.write((const char*)&material.shininess, sizeof(material.shininess));
         // size + 1 for strings to include null terminator
         file.write(material.diffuse_map_filename.c_str(), material.diffuse_map_filename.size() + 1); 
         file.write(material.specular_map_filename.c_str(), material.specular_map_filename.size() + 1); 
