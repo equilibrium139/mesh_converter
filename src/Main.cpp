@@ -219,7 +219,7 @@ void ConvertMesh(const char* path)
     auto animation_clip_files = ExtractAnimationClips(skeleton_animations, skeleton_file);
     auto model_file = ExtractModels(model_meshes, model_name + ".model", skeleton_file);
     model_file.materials = ExtractMaterials(model_materials, scene);
-    model_file.header.num_materials = model_file.materials.size();
+    model_file.header.num_materials = (std::uint32_t)model_file.materials.size();
 
     if (skeleton_file.header.num_joints > 0)
     {
@@ -614,9 +614,7 @@ void WriteSkeletonFile(const SkeletonFile& skeleton, const std::string& file_pat
     file.write((const char*)skeleton.joints.data(), skeleton.joints.size() * sizeof(Joint));
     for (auto& name : skeleton.joint_names)
     {
-        std::uint32_t num_chars = (std::uint32_t)name.size();
-        file.write((const char*)&num_chars, sizeof(num_chars));
-        file.write(name.c_str(), num_chars);
+        file.write(name.c_str(), name.size() + 1);
     }
 }
 
