@@ -61,8 +61,8 @@ struct Vertex
 enum class VertexFlags : std::uint32_t
 {
     DEFAULT = 0, // vec3 position vec3 normal vec2 uv
-    HAS_TANGENT = 1, // vec3 tangent
-    HAS_JOINT_DATA = 2, // uint32 joint indices vec4 joint weights
+    HAS_TANGENT = 1 << 0, // vec3 tangent
+    HAS_JOINT_DATA = 1 << 1, // uint32 joint indices vec4 joint weights
 };
 
 inline VertexFlags operator | (VertexFlags lhs, VertexFlags rhs)
@@ -77,9 +77,57 @@ inline VertexFlags& operator |= (VertexFlags& lhs, VertexFlags rhs)
     return lhs;
 }
 
+inline VertexFlags operator & (VertexFlags lhs, VertexFlags rhs)
+{
+    using T = std::underlying_type_t<VertexFlags>;
+    return (VertexFlags)((T)lhs & (T)rhs);
+}
+
+inline VertexFlags& operator &= (VertexFlags& lhs, VertexFlags rhs)
+{
+    lhs = lhs & rhs;
+    return lhs;
+}
+
 inline bool HasFlag(VertexFlags flags, VertexFlags flag_to_check)
 {
-    return (std::underlying_type_t<VertexFlags>)(flags | flag_to_check) != 0;
+    return (std::underlying_type_t<VertexFlags>)(flags & flag_to_check) != 0;
+}
+
+enum class PhongMaterialFlags : std::uint32_t
+{
+    DEFAULT = 0,
+    DIFFUSE_WITH_ALPHA = 1,
+};
+
+inline PhongMaterialFlags operator | (PhongMaterialFlags lhs, PhongMaterialFlags rhs)
+{
+    using T = std::underlying_type_t<PhongMaterialFlags>;
+    return (PhongMaterialFlags)((T)lhs | (T)rhs);
+}
+
+inline PhongMaterialFlags& operator |= (PhongMaterialFlags& lhs, PhongMaterialFlags rhs)
+{
+    lhs = lhs | rhs;
+    return lhs;
+}
+
+inline PhongMaterialFlags operator & (PhongMaterialFlags lhs, PhongMaterialFlags rhs)
+{
+    using T = std::underlying_type_t<PhongMaterialFlags>;
+    return (PhongMaterialFlags)((T)lhs & (T)rhs);
+}
+
+inline PhongMaterialFlags& operator &= (PhongMaterialFlags& lhs, PhongMaterialFlags rhs)
+{
+    lhs = lhs & rhs;
+    return lhs;
+}
+
+
+inline bool HasFlag(PhongMaterialFlags flags, PhongMaterialFlags flag_to_check)
+{
+    return (std::underlying_type_t<PhongMaterialFlags>)(flags & flag_to_check) != 0;
 }
 
 struct PhongMaterial
@@ -87,6 +135,7 @@ struct PhongMaterial
     Vec3 diffuse_coefficient;
     Vec3 specular_coefficient;
     float shininess;
+    PhongMaterialFlags flags = PhongMaterialFlags::DEFAULT;
     std::string diffuse_map_filename;
     std::string specular_map_filename;
     std::string normal_map_filename;
@@ -101,9 +150,10 @@ struct Mesh
 
 struct ModelFile
 {
+    static constexpr std::uint32_t correct_magic_number = 'ldom';
     struct Header 
     {
-        std::uint32_t magic_number = 'ldom';
+        std::uint32_t magic_number = correct_magic_number;
         std::uint32_t num_meshes;
         std::uint32_t num_vertices;
         std::uint32_t num_indices;
@@ -127,9 +177,10 @@ struct Joint
 
 struct SkeletonFile
 {
+    static constexpr std::uint32_t correct_magic_number = 'ntks';
     struct Header
     {
-        std::uint32_t magic_number = 'ntks';
+        std::uint32_t magic_number = correct_magic_number;
         std::uint32_t num_joints;
     };
     Header header;
@@ -151,10 +202,11 @@ struct SkeletonPose
 
 struct AnimationClipFile
 {
+    static constexpr std::uint32_t correct_magic_number = 'pilc';
     struct Header
     {
         using bool32 = std::uint32_t; // for padding purposes
-        std::uint32_t magic_number = 'pilc';
+        std::uint32_t magic_number = correct_magic_number;
         std::uint32_t frame_count;
         float frames_per_second; 
         bool32 loops = false; // fix later
@@ -165,17 +217,24 @@ struct AnimationClipFile
     std::string name;
 };
 
-SkeletonFile ExtractSkeleton(const aiScene* scene);
-std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimation*>& assimp_animations, const SkeletonFile& skeleton);
+struct AssimpNode
+{
+    const aiNode* node;
+    int parent;
+};
+
+SkeletonFile ExtractSkeleton(const std::vector<AssimpNode>& nodes, const std::vector<aiMesh*>& meshes);
+std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimation*>& assimp_animations, const std::vector<AssimpNode>& nodes, const SkeletonFile& skeleton);
 ModelFile ExtractModels(const std::vector<aiMesh*>& assimp_meshes, const std::string& file_path, const SkeletonFile& skeleton);
 std::vector<PhongMaterial> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene);
 void WriteSkeletonFile(const SkeletonFile& skeleton, const std::string& file_path);
 void WriteAnimationFiles(const AnimationClipFile& animation);
 void WriteModelFile(const ModelFile& model);
 void ConvertMesh(const char* path);
-void PushChildrenOf(std::vector<aiNode*>& nodes, std::vector<int>& parent, unsigned int begin);
-std::pair<std::vector<aiNode*>, std::vector<int>> FlattenNodeHierarchy(aiNode* root);
+void PushChildrenOf(std::vector<AssimpNode>& nodes, unsigned int begin);
+std::vector<AssimpNode> FlattenNodeHierarchy(aiNode* root);
 Mat3x4 ToGLMMat(const aiMatrix4x4& assimp_matrix);
+SkeletonFile LoadSkeleton(const std::string_view path);
 
 int main(int argc, char** argv)
 {
@@ -201,22 +260,41 @@ void ConvertMesh(const char* path)
         aiProcess_CalcTangentSpace | aiProcess_JoinIdenticalVertices;
     const aiScene* scene = importer.ReadFile(path, flags);
     
-    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
+    if (!scene /*|| scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE*/ || !scene->mRootNode)
     {
         std::cout << "ERROR::ASSIMP::" << importer.GetErrorString() << '\n';
         return;
     }
 
+    std::vector<aiAnimation*> skeleton_animations(scene->mAnimations, scene->mAnimations + scene->mNumAnimations);
     std::vector<aiMesh*> model_meshes(scene->mMeshes, scene->mMeshes + scene->mNumMeshes);
     std::vector<aiMaterial*> model_materials(scene->mMaterials, scene->mMaterials + scene->mNumMaterials);
-    std::vector<aiAnimation*> skeleton_animations(scene->mAnimations, scene->mAnimations + scene->mNumAnimations);
+
+    auto nodes = FlattenNodeHierarchy(scene->mRootNode);
+
+    // This flag really just means that there are no meshes in the scene.
+    // Can use this to process animation data 
+    if (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE)
+    {
+        assert(scene->mNumAnimations == 1); 
+
+        std::cout << "Enter skeleton file path: ";
+        std::string skeleton_file_path;
+        std::cin >> skeleton_file_path;
+
+        auto skeleton = LoadSkeleton(skeleton_file_path);
+        auto animation_clip = ExtractAnimationClips(skeleton_animations, nodes, skeleton);
+        assert(animation_clip.size() == 1);
+        WriteAnimationFiles(animation_clip[0]);
+        return;
+    }
 
     std::string model_name;
     std::cout << "Enter model name: ";
     std::cin >> model_name;
 
-    auto skeleton_file = ExtractSkeleton(scene);
-    auto animation_clip_files = ExtractAnimationClips(skeleton_animations, skeleton_file);
+    auto skeleton_file = ExtractSkeleton(nodes, model_meshes);
+    auto animation_clip_files = ExtractAnimationClips(skeleton_animations, nodes, skeleton_file);
     auto model_file = ExtractModels(model_meshes, model_name + ".model", skeleton_file);
     model_file.materials = ExtractMaterials(model_materials, scene);
     model_file.header.num_materials = (std::uint32_t)model_file.materials.size();
@@ -239,20 +317,16 @@ void ConvertMesh(const char* path)
     WriteModelFile(model_file);
 }
 
-SkeletonFile ExtractSkeleton(const aiScene* scene)
+SkeletonFile ExtractSkeleton(const std::vector<AssimpNode>& nodes, const std::vector<aiMesh*>& meshes)
 {
-    auto flattened_nodes = FlattenNodeHierarchy(scene->mRootNode);
-    auto& nodes = flattened_nodes.first;
-    auto& parent = flattened_nodes.second;
-
     const auto num_nodes = nodes.size();
 
     // Mark all nodes which correspond to a bone
     std::vector<aiBone*> node_bones(num_nodes, nullptr);
-    const auto num_meshes = scene->mNumMeshes;
+    const auto num_meshes = meshes.size();
     for (auto i = 0u; i < num_meshes; i++)
     {
-        auto mesh = scene->mMeshes[i];
+        auto mesh = meshes[i];
 
         const auto num_bones = mesh->mNumBones;
         for (auto j = 0u; j < num_bones; j++)
@@ -261,7 +335,7 @@ SkeletonFile ExtractSkeleton(const aiScene* scene)
 
             for (auto k = 0u; k < num_nodes; k++)
             {
-                if (bone->mName == nodes[k]->mName)
+                if (bone->mName == nodes[k].node->mName)
                 {
                     node_bones[k] = bone;
                     break;
@@ -286,10 +360,10 @@ SkeletonFile ExtractSkeleton(const aiScene* scene)
             joint_names.emplace_back(bone->mName.C_Str());
             joint.model_to_joint_transform = ToGLMMat(bone->mOffsetMatrix);
 
-            auto node_parent_index = parent[i];
+            auto node_parent_index = nodes[i].parent;
             if (node_parent_index >= 0 && node_bones[node_parent_index] != nullptr)
             {
-                auto parent_iter = std::find(joint_names.begin(), joint_names.end(), nodes[node_parent_index]->mName.C_Str());
+                auto parent_iter = std::find(joint_names.begin(), joint_names.end(), nodes[node_parent_index].node->mName.C_Str());
                 assert(parent_iter != joint_names.end());
                 joint.parent = (int)std::distance(joint_names.begin(), parent_iter);
             }
@@ -310,7 +384,6 @@ ModelFile ExtractModels(const std::vector<aiMesh*>& assimp_meshes, const std::st
     auto& indices = model_file.indices;
     auto& vertices = model_file.vertices;
 
-    // Process meshes
     for (auto i = 0u; i < assimp_meshes.size(); i++)
     {
         auto assimp_mesh = assimp_meshes[i];
@@ -387,11 +460,43 @@ ModelFile ExtractModels(const std::vector<aiMesh*>& assimp_meshes, const std::st
 
 std::vector<PhongMaterial> ExtractMaterials(const std::vector<aiMaterial*>& assimp_materials, const aiScene* scene)
 {
+    static std::vector<aiTextureType> unsupported_texture_types =
+    {
+        {aiTextureType_NONE},
+        {aiTextureType_AMBIENT},
+        {aiTextureType_EMISSIVE},
+        {aiTextureType_HEIGHT},
+        {aiTextureType_SHININESS},
+        {aiTextureType_DISPLACEMENT},
+        {aiTextureType_LIGHTMAP},
+        {aiTextureType_REFLECTION},
+        {aiTextureType_BASE_COLOR},
+        {aiTextureType_NORMAL_CAMERA},
+        {aiTextureType_EMISSION_COLOR},
+        {aiTextureType_METALNESS},
+        {aiTextureType_DIFFUSE_ROUGHNESS},
+        {aiTextureType_AMBIENT_OCCLUSION},
+        {aiTextureType_SHEEN},
+        {aiTextureType_CLEARCOAT},
+        {aiTextureType_TRANSMISSION},
+        {aiTextureType_UNKNOWN}
+    };
+
     std::vector<PhongMaterial> materials;
 
     for (auto i = 0u; i < assimp_materials.size(); i++)
     {
         auto material = assimp_materials[i];
+
+        std::cout << material->GetName().C_Str() << '\n';
+
+        for (auto type : unsupported_texture_types)
+        {
+            if (material->GetTextureCount(type) > 0)
+            {
+                std::cout << "Warning: unsupported texture type '" << TextureTypeToString(type) << "' on material '" << material->GetName().C_Str() << "'\n";
+            }
+        }
 
         materials.emplace_back();
         auto& new_material = materials.back();
@@ -445,6 +550,24 @@ std::vector<PhongMaterial> ExtractMaterials(const std::vector<aiMaterial*>& assi
         else
         {
             // TODO: handle no diffuse texture
+        }
+
+        if (material->GetTextureCount(aiTextureType_OPACITY) > 1)
+        {
+            std::cout << "Warning: Unsupported multiple specular textures on material '" << material->GetName().C_Str() << "'\n";
+        }
+
+        aiString opacity_texture_path;
+        if (material->Get(AI_MATKEY_TEXTURE_OPACITY(0), opacity_texture_path) != aiReturn_FAILURE)
+        {
+            if (opacity_texture_path == diffuse_texture_path)
+            {
+                new_material.flags |= PhongMaterialFlags::DIFFUSE_WITH_ALPHA;
+            }
+            else
+            {
+                std::cout << "Warning: Opacity map texture only supported if embedded in diffuse texture\n";
+            }
         }
 
         if (material->GetTextureCount(aiTextureType_SPECULAR) > 1)
@@ -539,38 +662,123 @@ static JointPose ToJointPose(const aiMatrix4x4 matrix)
     return joint_pose;
 }
 
-std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimation*>& assimp_animations, const SkeletonFile& skeleton)
+static Vec3 Interpolate(const Vec3& a, const Vec3& b, float t)
+{
+    Vec3 interpolated = {
+        .x = (1 - t) * a.x + t * b.x,
+        .y = (1 - t) * a.y + t * b.y,
+        .z = (1 - t) * a.z + t * b.z
+    };
+}
+
+static JointPose ToJointPose(const aiVector3D& scaling, const aiQuaternion& rotation, const aiVector3D& translation)
+{
+    JointPose joint_pose;
+    joint_pose.scale = { scaling.x, scaling.y, scaling.z };
+    joint_pose.rotation = { rotation.w, rotation.x, rotation.y, rotation.z };
+    joint_pose.translation = { translation.x, translation.y, translation.z };
+    return joint_pose;
+}
+
+static JointPose SampleAt(aiNodeAnim* anim, float tick)
+{
+    static Assimp::Interpolator<aiVector3D> lerp;
+    static Assimp::Interpolator<aiQuaternion> slerp;
+
+    for (int i = 0; i < anim->mNumPositionKeys; i++)
+    {
+        if (anim->mPositionKeys[i].mTime > tick)
+        {
+            // Nothing to interpolate between
+            if (i == 0)
+            {
+                return ToJointPose(anim->mScalingKeys[0].mValue, anim->mRotationKeys[0].mValue, anim->mPositionKeys[0].mValue);
+            }
+            else
+            {
+                float t = (tick - anim->mPositionKeys[i - 1].mTime) / (anim->mPositionKeys[i].mTime - anim->mPositionKeys[i - 1].mTime);
+                aiVector3D interpolated_position, interpolated_scale;
+                aiQuaternion interpolated_rotation;
+                lerp(interpolated_position, anim->mPositionKeys[i - 1].mValue, anim->mPositionKeys[i].mValue, t);
+                lerp(interpolated_scale, anim->mScalingKeys[i - 1].mValue, anim->mScalingKeys[i].mValue, t);
+                slerp(interpolated_rotation, anim->mRotationKeys[i - 1].mValue, anim->mRotationKeys[i].mValue, t);
+                return ToJointPose(interpolated_scale, interpolated_rotation, interpolated_position);
+            }
+        }
+        if (i == anim->mNumPositionKeys - 1)
+        {
+            // Also nothing to interpolate between
+            return ToJointPose(anim->mScalingKeys[anim->mNumPositionKeys - 1].mValue, anim->mRotationKeys[anim->mNumPositionKeys - 1].mValue, anim->mPositionKeys[anim->mNumPositionKeys - 1].mValue);
+        }
+    }
+}
+
+std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimation*>& assimp_animations, const std::vector<AssimpNode>& nodes, const SkeletonFile& skeleton)
 {
     std::vector<AnimationClipFile> animation_clip_files;
 
-    const aiMatrix4x4 identity_matrix;
+    /*const aiMatrix4x4 identity_matrix;
     const JointPose identity_joint_pose = ToJointPose(identity_matrix);
     SkeletonPose identity_skeleton_pose;
     identity_skeleton_pose.joint_poses.resize(skeleton.header.num_joints);
-    for (auto& joint_pose : identity_skeleton_pose.joint_poses) joint_pose = identity_joint_pose;
+    for (auto& joint_pose : identity_skeleton_pose.joint_poses) joint_pose = identity_joint_pose;*/
+
+    SkeletonPose original_pose;
+
+    original_pose.joint_poses.resize(skeleton.header.num_joints);
+    for (int i = 0; i < skeleton.header.num_joints; i++)
+    {
+        auto& joint_name = skeleton.joint_names[i];
+
+        int node_index = 0;
+        while (node_index < nodes.size() && joint_name != nodes[node_index].node->mName.C_Str()) node_index++;
+        assert(node_index < nodes.size());
+        auto node = nodes[node_index].node;
+
+        original_pose.joint_poses[i] = ToJointPose(node->mTransformation);
+    }
 
     for (auto& assimp_animation : assimp_animations)
     {
         // assert(assimp_animation->mNumChannels == skeleton.header.num_joints);
         animation_clip_files.emplace_back();
         auto& animation_clip = animation_clip_files.back();
-        animation_clip.header.frame_count = (std::uint32_t)assimp_animation->mDuration;
-        animation_clip.header.frames_per_second = (float)assimp_animation->mTicksPerSecond;
+        // Not sure why Assimp is storing the duration in ticks as a double but I'm going to assume that it's
+        // an integer number
+        assert(std::abs(assimp_animation->mDuration - std::floor(assimp_animation->mDuration)) < 0.01 || 
+               std::abs(assimp_animation->mDuration - std::ceil(assimp_animation->mDuration)) < 0.01);
+        const float duration_in_seconds = assimp_animation->mDuration / assimp_animation->mTicksPerSecond;
+        animation_clip.header.frames_per_second = 30; 
+        animation_clip.header.frame_count = animation_clip.header.frames_per_second * duration_in_seconds;
+        //animation_clip.header.frame_count = (std::uint32_t)assimp_animation->mDuration;
+        //animation_clip.header.frames_per_second = (float)assimp_animation->mTicksPerSecond;
         animation_clip.name = assimp_animation->mName.C_Str();
         auto& skeleton_poses = animation_clip.skeleton_poses;
-        skeleton_poses.resize(animation_clip.header.frame_count);
-        for (auto& pose : skeleton_poses) pose = identity_skeleton_pose;
+        const auto pose_count = animation_clip.header.frame_count + (animation_clip.header.loops ? 0 : 1);
+        skeleton_poses.resize(pose_count);
+        for (auto& pose : skeleton_poses) pose = original_pose;
+
+        const float tick_delta = assimp_animation->mTicksPerSecond / animation_clip.header.frames_per_second;
         for (auto i = 0u; i < assimp_animation->mNumChannels; i++)
         {
             auto node_anim = assimp_animation->mChannels[i];
-            assert(node_anim->mNumPositionKeys == node_anim->mNumRotationKeys && node_anim->mNumPositionKeys == node_anim->mNumScalingKeys);
-            const auto pose_count = animation_clip.header.frame_count + (animation_clip.header.loops ? 0 : 1);
-            assert(node_anim->mNumPositionKeys == pose_count || node_anim->mNumPositionKeys == 1);
+
             auto node_joint_index = 0u;
             while (node_joint_index < skeleton.header.num_joints && skeleton.joint_names[node_joint_index] != node_anim->mNodeName.C_Str()) node_joint_index++;
             assert(node_joint_index < skeleton.header.num_joints);
+
+            assert(node_anim->mNumPositionKeys == node_anim->mNumRotationKeys && node_anim->mNumPositionKeys == node_anim->mNumScalingKeys);
+            //assert(node_anim->mNumPositionKeys >= pose_count || node_anim->mNumPositionKeys == 1);
+
+            float tick = 0.0f;
+            for (auto& skeleton_pose : skeleton_poses)
+            {
+                skeleton_pose.joint_poses[node_joint_index] = SampleAt(node_anim, tick);
+                tick += tick_delta;
+            }
+
             // joint pose is constant over the animation
-            if (node_anim->mNumPositionKeys == 1)
+           /* if (node_anim->mNumPositionKeys == 1)
             {
                 auto scaling = node_anim->mScalingKeys[0].mValue;
                 auto rotation = node_anim->mRotationKeys[0].mValue;
@@ -584,9 +792,13 @@ std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimati
                     pose.joint_poses[node_joint_index] = joint_pose;
                 }
             }
+            else if (node_anim->mNumPositionKeys != pose_count)
+            {
+                std::cout << "Stuff\n";
+            }
             else
             {
-                for (auto j = 0u; j < animation_clip.header.frame_count; j++)
+                for (auto j = 0u; j < pose_count; j++)
                 {
                     auto scaling = node_anim->mScalingKeys[j].mValue;
                     auto rotation = node_anim->mRotationKeys[j].mValue;
@@ -599,7 +811,7 @@ std::vector<AnimationClipFile> ExtractAnimationClips(const std::vector<aiAnimati
                     auto& current_frame_skeleton_pose = skeleton_poses[j];
                     current_frame_skeleton_pose.joint_poses[node_joint_index] = current_frame_joint_pose;
                 }
-            }
+            }*/
         }
     }
 
@@ -620,7 +832,8 @@ void WriteSkeletonFile(const SkeletonFile& skeleton, const std::string& file_pat
 
 void WriteAnimationFiles(const AnimationClipFile& animation_clip)
 {
-    assert(animation_clip.header.frame_count == animation_clip.skeleton_poses.size());
+    const auto pose_count = animation_clip.header.frame_count + (animation_clip.header.loops ? 0 : 1);
+    assert(pose_count == animation_clip.skeleton_poses.size());
 
     std::ofstream file(animation_clip.name + ".animation", std::ios::binary);
 
@@ -686,6 +899,7 @@ void WriteModelFile(const ModelFile& model)
         file.write((const char*)&material.diffuse_coefficient, sizeof(material.diffuse_coefficient));
         file.write((const char*)&material.specular_coefficient, sizeof(material.specular_coefficient));
         file.write((const char*)&material.shininess, sizeof(material.shininess));
+        file.write((const char*)&material.flags, sizeof(material.flags));
         // size + 1 for strings to include null terminator
         file.write(material.diffuse_map_filename.c_str(), material.diffuse_map_filename.size() + 1); 
         file.write(material.specular_map_filename.c_str(), material.specular_map_filename.size() + 1); 
@@ -693,32 +907,29 @@ void WriteModelFile(const ModelFile& model)
     }
 }
 
-void PushChildrenOf(std::vector<aiNode*>& nodes, std::vector<int>& parent, unsigned int begin)
+void PushChildrenOf(std::vector<AssimpNode>& nodes, unsigned int begin)
 {
     unsigned int end = (unsigned int)nodes.size();
     for (unsigned int i = begin; i < end; i++)
     {
         auto node = nodes[i];
-        for (unsigned int j = 0; j < node->mNumChildren; j++)
+        for (unsigned int j = 0; j < node.node->mNumChildren; j++)
         {
-            nodes.push_back(node->mChildren[j]);
-            parent.push_back(i);
+            nodes.push_back({ node.node->mChildren[j], (int)i });
         }
     }
     if (end < nodes.size())
     {
-        PushChildrenOf(nodes, parent, end);
+        PushChildrenOf(nodes, end);
     }
 }
 
-std::pair<std::vector<aiNode*>, std::vector<int>> FlattenNodeHierarchy(aiNode* root)
+std::vector<AssimpNode> FlattenNodeHierarchy(aiNode* root)
 {
-    std::vector<aiNode*> flattened;
-    std::vector<int> parent;
-    flattened.push_back(root);
-    parent.push_back(-1);
-    PushChildrenOf(flattened, parent, 0);
-    return { flattened, parent };
+    std::vector<AssimpNode> nodes;
+    nodes.push_back({ root, -1 });
+    PushChildrenOf(nodes, 0);
+    return nodes;
 }
 
 Mat3x4 ToGLMMat(const aiMatrix4x4& assimp_matrix)
@@ -742,4 +953,23 @@ Mat3x4 ToGLMMat(const aiMatrix4x4& assimp_matrix)
     glm_mat.column4[2] = assimp_matrix.c4;
 
     return glm_mat;
+}
+
+SkeletonFile LoadSkeleton(const std::string_view path)
+{
+    std::ifstream file(path.data(), std::ios::binary);
+
+    SkeletonFile data;
+    file.read((char*)&data.header, sizeof(data.header));
+    assert(data.header.magic_number == SkeletonFile::correct_magic_number);
+    const auto num_joints = (int)data.header.num_joints;
+    data.joints.resize(num_joints);
+    file.read((char*)&data.joints[0], num_joints * sizeof(data.joints[0]));
+    data.joint_names.resize(num_joints);
+    for (auto& name : data.joint_names)
+    {
+        std::getline(file, name, '\0');
+    }
+
+    return data;
 }
